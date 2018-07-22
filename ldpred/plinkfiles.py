@@ -1,3 +1,4 @@
+#-*- coding: utf-8 -*-
 """
 Code for handling plink files.
 
@@ -6,26 +7,33 @@ Uses plinkio.
 from plinkio import plinkfile
 import scipy as sp
 
+
+# 유전체(chromosomes) 별 사전을 만듭니다.
+# {'chrom_1' : { 'sids' : ['sid_0', 'sid_1', ...],
+#                'snp_indices' : [0, 1, ...],
+#                'positions' : [0L, 1L, ...],
+#                'nts': [['A','G'], ['A','G'], ...]
+#              }, ...
+# }
 def get_chrom_dict(loci, chromosomes):
     chr_dict = {}
     for chrom in chromosomes:
         chr_str = 'chrom_%s' % chrom
         chr_dict[chr_str] = {'sids':[], 'snp_indices':[], 'positions':[], 'nts':[]}
-      
+
     for i, l in enumerate(loci):
         chrom = l.chromosome
         pos = l.bp_position
         chr_str = 'chrom_%d' % chrom
+
         chr_dict[chr_str]['sids'].append(l.name)
 #         chr_dict[chr_str]['sids'].append('%d_%d'%(chrom,pos))
         chr_dict[chr_str]['snp_indices'].append(i)
         chr_dict[chr_str]['positions'].append(pos)
         chr_dict[chr_str]['nts'].append([l.allele1, l.allele2])
-      
+
     print 'Genotype dictionary filled'
     return chr_dict
-
-
 
 def parse_plink_snps(genotype_file, snp_indices):
     plinkf = plinkfile.PlinkFile(genotype_file)
@@ -64,22 +72,47 @@ def parse_plink_snps(genotype_file, snp_indices):
     freqs = sp.sum(raw_snps, 1, dtype='float32') / (2 * float(num_indivs))
     return raw_snps, freqs
 
-
+# GWAS Study pipeline
+# 링크 : http://www.gwaspi.org/?page_id=123
+#
+#
+# .fam 파일의 형태
+# familyId  sampleId  paternalId  maternalId  sex  affection
+#       i0        i0          i0          i0    2          1
+#       i1        i1          i1          i1    2          2
+# sex = [1=male, 2=female, other=unknown]
+# affection = [0=unknown, 1=unaffected, 2=affected]
 def get_phenotypes(plinkf):
+
+    # 개인(Sample) 정보를 읽어와서, 'phenotype' 이 중복되지 않는 집합을 만듭니다.
+    # (ex) LDpred_cc_data_p0.001_test_0 : [0.0, 1.0]
+    #      LDpred_data_p0.001_test_0    : [1.3305020332336426, -0.38473600149154663, -1.2226539850234985, ...]
+    #
+    # sample = [fid, iid, father_iid, mother_iid, sex, affection, phenotype]
+    #           ---  ---                          ---  ---------
+    #       sex = [0=female, 1=male]
+    # affection = [0=control, 1=case, -9=missing] + anything else means that the phenotype is continuous.
+    # pehnotype = [0.0=control, 1.0=case]
     samples = plinkf.get_samples()
     num_individs = len(samples)
     Y = [s.phenotype for s in samples]
     fids = [s.fid for s in samples]
     iids = [s.iid for s in samples]
     unique_phens = sp.unique(Y)
+
+    # 'phenotype' 1이면, 형질을 찾을 수 없다고 봐야합니다. (차이가 없음)
     if len(unique_phens) == 1:
         print 'Unable to find phenotype values.'
         has_phenotype = False
+    # 'phenotype' 2이면, 차이를 보이는 두 집단을 구분해 낼 수 있습니다.
+    # LDpred_cc_data_p0.001_test_0
     elif len(unique_phens) == 2:
         cc_bins = sp.bincount(Y)
         assert len(cc_bins) == 2, 'Problems with loading phenotype'
         print 'Loaded %d controls and %d cases' % (cc_bins[0], cc_bins[1])
         has_phenotype = True
+    # 'phenotype' 개수가 다양하게 발견되었다고 볼 수 있습니다.
+    # LDpred_data_p0.001_test_0
     else:
         print 'Found quantitative phenotype values'
         has_phenotype = True
